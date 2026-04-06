@@ -3,6 +3,7 @@ use rdev::{Event, EventType, Key, listen};
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::sync::LazyLock;
+use std::process::Command;
 
 #[derive(Deserialize)]
 pub struct Shortcut {
@@ -45,6 +46,16 @@ fn callback(event: Event) {
             let mut pressed = PRESSED.lock().unwrap();
             pressed.insert(key_name);
             println!("Pressed keys: {:?}", *pressed);
+
+            if let Some(shortcuts) = SHORTCUTS.get(){
+                for shortcut in shortcuts {
+                    if *pressed == shortcut.keys {
+                        println!("Executing command for shortcut '{}': {}", shortcut.label, shortcut.command);
+                        let cmd = shortcut.command.clone();
+                        std::thread::spawn(move || launch_command(&cmd));
+                    }
+                }
+            }
         }
         EventType::KeyRelease(key) => {
             let key_name = key_to_string(&key);
@@ -59,8 +70,9 @@ fn callback(event: Event) {
 fn normalize_key(name: &str) -> String {
     match name.to_lowercase().as_str() {
         "cmd" | "command" | "meta" | "super" => "meta".to_string(),
-        "ctrl" | "control" => "control".to_string(),
+        "ctrl" | "control" => "ctrl".to_string(),
         "shift" => "shift".to_string(),
+        "enter" | "return" => "return".to_string(),
         other => other.to_string()
     }
 }
@@ -78,6 +90,19 @@ fn parse_shortcuts(config: &Config) -> Vec<RegisteredShortcut> {
             keys,
         }
     }).collect()
+}
+
+fn launch_command(command: &str) {
+    // Open a new instance of the app if it is an app and located in applications
+    if command.ends_with(".app") || command.starts_with("/Applications") {
+        Command::new("open").arg("-n").arg("-a").arg(command).spawn().ok();
+    } else {
+        // Try as app name first, fall back to shell command
+        let result = Command::new("open").arg("-a").arg(command).spawn();
+        if result.is_err() {
+            Command::new("sh").arg("-c").arg(command).spawn().ok();
+        }
+    }
 }
 
 fn key_to_string(key: &Key) -> String {
@@ -151,19 +176,11 @@ fn key_to_string(key: &Key) -> String {
 fn main() {
     let config = load_config();
     let shortcuts = parse_shortcuts(&config);
-
-    for shortcut in shortcuts {
-        for key in &shortcut.keys {
-            println!("Shortcut '{}' includes key '{}'", shortcut.label, key);
-        }
-    }
+    SHORTCUTS.set(shortcuts);
 
     loop {
         if let Err(error) = listen(callback) {
             println!("Error: {:?}", error)
         }
     }
-
-
-
 }
